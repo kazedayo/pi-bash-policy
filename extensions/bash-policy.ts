@@ -17,32 +17,10 @@
  */
 import { createBashTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { blockedSearchWord } from "./policy.ts";
 
 const GATE_MESSAGE =
   "Blocked: bash calls require an explicit reason. Re-issue with a non-empty `reason` field stating why bash is needed.";
-
-// File-searching commands: redirected to the built-in tools. Matched only at
-// command positions (see commandAt below), not anywhere in the string.
-const FILE_SEARCH: string[] = [
-  "grep",
-  "find",
-  "fd",
-  "fdfind",
-  "locate",
-  "ls",
-  "cat",
-  "head",
-  "tail",
-  "wc",
-  "du",
-  "stat",
-  "file",
-  "tree",
-  "ag",
-  "ack",
-  "awk",
-  "sed",
-];
 
 // Redirect the model to the equivalent built-in tool instead of a plain block.
 const REDIRECTS: Record<string, string> = {
@@ -69,18 +47,6 @@ const REDIRECTS: Record<string, string> = {
 // Simple line counting: a lone `wc -l` with file arguments only — no pipes,
 // semicolons, redirection into other commands, or command substitution.
 const LINE_COUNT = /^(\S*\/)?wc\s+(-\w*l\w*\b\s*)+[^|;&`$<>]*$/;
-
-// A FILE_SEARCH word only counts where a command can start: first token, or
-// right after |, &&, ;, &, newline, $(), or backticks. Prevents false hits in
-// flags/paths/commit messages ("git diff --stat", "git ls-files", -m "add file").
-const COMMAND_SPLIT = /[|;&`\n]|\$\(/;
-
-function commandAt(command: string, word: string): boolean {
-  return command.split(COMMAND_SPLIT).some((seg) => {
-    const first = seg.trim().split(/\s+/)[0] ?? "";
-    return first.split("/").pop() === word;
-  });
-}
 
 export default function (pi: ExtensionAPI) {
   // Hide bash until terminal access is requested.
@@ -155,10 +121,9 @@ export default function (pi: ExtensionAPI) {
 
     if (LINE_COUNT.test(command)) return; // allow plain line counts
 
-    for (const word of FILE_SEARCH) {
-      if (commandAt(command, word)) {
-        return { block: true, reason: REDIRECTS[word] ?? `Blocked by deny list (matched "${word}")` };
-      }
+    const word = blockedSearchWord(command);
+    if (word) {
+      return { block: true, reason: REDIRECTS[word] ?? `Blocked by deny list (matched "${word}")` };
     }
   });
 }
