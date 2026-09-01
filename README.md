@@ -10,8 +10,12 @@ file-dumping:
    the `tool_call` hook enforces it.
 3. **Content policy** — file search/read commands (`grep`, `cat`, `ls`,
    `find`, `head`, ...) at command positions are blocked with a redirect to
-   the equivalent built-in tool. Checked on the command itself, so reasons
-   can't lie.
+   the equivalent built-in tool. Pipes that trim or filter a command's own
+   output (`pnpm test | grep FAIL`, `git log | head -20`) are allowed.
+   `rg` is deliberately allowed. Checked on the command itself, so reasons
+   can't lie. This is a deterrent, not a sandbox: wrappers with flags,
+   function definitions, and scripts that open files themselves (awk
+   `getline`, sed `r`) can slip through.
 
 ## Install
 

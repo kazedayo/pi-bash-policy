@@ -12,10 +12,13 @@
  *    first call after activation used to lack one). The `tool_call` hook still
  *    enforces a non-empty reason.
  * 3. Content policy — file-search/read commands at command positions are
- *    redirected to the built-in tools. Content is checked on the command
+ *    redirected to the built-in tools; pipes that trim/filter a command's
+ *    own output are allowed. Quote-wrapped words and no-op prefixes
+ *    (env/time/VAR=x) are seen through. Content is checked on the command
  *    itself, so reasons can't lie.
  */
 import { createBashTool, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { blockedSearchWord } from "./policy.ts";
 
@@ -41,23 +44,31 @@ const REDIRECTS: Record<string, string> = {
   stat: "Blocked by deny list (matched \"stat\"). Use the built-in `read` or `find` tool instead.",
   file: "Blocked by deny list (matched \"file\"). Use the built-in `read` tool instead.",
   awk: "Blocked by deny list (matched \"awk\"). Use the built-in `read` tool to inspect files; `grep` tool to filter lines.",
+  xargs: "Blocked by deny list (matched \"xargs\"). It runs commands against file lists — use the built-in tools directly.",
   sed: "Blocked by deny list (matched \"sed\"). Use the built-in `edit` tool to modify files; `read`/`grep` tools to inspect them.",
 };
 
 // Simple line counting: a lone `wc -l` with file arguments only — no pipes,
 // semicolons, redirection into other commands, or command substitution.
-const LINE_COUNT = /^(\S*\/)?wc\s+(-\w*l\w*\b\s*)+[^|;&`$<>]*$/;
+const LINE_COUNT = /^(\S*\/)?wc\s+(-\w*l\w*\b\s*)+[^|;&`$<>\n]*$/;
 
 export default function (pi: ExtensionAPI) {
-  // Hide bash until terminal access is requested.
+  // Hide bash until terminal access is requested. hidBash records that bash
+  // was active at session start, so request_terminal cannot resurrect a tool
+  // the user disabled in settings.
+  let hidBash = false;
   pi.on("session_start", () => {
-    if (!pi.getActiveTools().includes("bash")) return;
+    if (!pi.getActiveTools().includes("bash")) {
+      hidBash = false;
+      return;
+    }
+    hidBash = true;
     pi.setActiveTools(pi.getActiveTools().filter((t) => t !== "bash"));
   });
 
   // Override built-in bash: identical behavior, but the schema requires a
   // `reason` field so models actually emit one (strict-schema providers must).
-  let realBash: ReturnType<typeof createBashTool> | undefined;
+  let realBash: { cwd: string; tool: ReturnType<typeof createBashTool> } | undefined;
   pi.registerTool({
     ...createBashTool(process.cwd()),
     parameters: Type.Object({
@@ -66,9 +77,26 @@ export default function (pi: ExtensionAPI) {
       reason: Type.String({ description: "Why this bash command is needed" }),
     }),
     async execute(toolCallId, params, signal, onUpdate, ctx) {
-      realBash ??= createBashTool(ctx.cwd);
+      if (realBash?.cwd !== ctx.cwd) realBash = { cwd: ctx.cwd, tool: createBashTool(ctx.cwd) };
       const { reason: _reason, ...rest } = params;
-      return realBash.execute(toolCallId, rest, signal, onUpdate);
+      return realBash.tool.execute(toolCallId, rest, signal, onUpdate, ctx);
+    },
+    // Surfaces `reason` in the call row. Reuses the built-in state.startedAt
+    // bookkeeping so the inherited renderResult keeps its Elapsed timer.
+    renderCall(args, theme, context) {
+      const state = context.state;
+      if (context.executionStarted && state.startedAt === undefined) {
+        state.startedAt = Date.now();
+        state.endedAt = undefined;
+      }
+      const command = typeof args.command === "string" && args.command ? args.command : theme.fg("toolOutput", "...");
+      let content = theme.fg("toolTitle", theme.bold(`$ ${command}`));
+      if (args.timeout) content += theme.fg("muted", ` (timeout ${args.timeout}s)`);
+      const reason = typeof args.reason === "string" ? args.reason.trim() : "";
+      if (reason) content += theme.fg("muted", `  —  ${reason}`);
+      const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+      text.setText(content);
+      return text;
     },
   });
 
@@ -79,6 +107,9 @@ export default function (pi: ExtensionAPI) {
       "Request access to the bash tool. Call this when you need to run shell commands.",
     parameters: Type.Object({}),
     async execute() {
+      if (!hidBash) {
+        return { content: [{ type: "text", text: "bash is not enabled in this session's tool configuration." }] };
+      }
       if (pi.getActiveTools().includes("bash")) {
         return { content: [{ type: "text", text: "bash is already available." }] };
       }
@@ -105,6 +136,7 @@ export default function (pi: ExtensionAPI) {
         "## Bash gating",
         "- Every `bash` tool call MUST include a `reason` field explaining why bash is needed.",
         "- Never use bash for file searching, listing, or reading (ls/cat/grep/find/head/tail/...). Use the built-in `grep`, `find`, and `read` tools instead.",
+        "- Pipes that trim or filter a command's own output (`pnpm test 2>&1 | grep FAIL`, `git log | head -20`) are fine.",
       ].join("\n"),
   }));
 
