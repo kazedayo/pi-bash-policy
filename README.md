@@ -15,24 +15,18 @@ file-dumping:
 
 ## Install
 
-No build step, no dependencies to install — pi's extension runtime provides
-`@earendil-works/pi-coding-agent` and `typebox`.
-
-Clone this repo anywhere, then symlink the extension into pi's extensions
-directory:
+No build step, no dependencies — pi's extension runtime provides
+`@earendil-works/pi-coding-agent` and `typebox`. Install as a pi git package:
 
 ```sh
-git clone <this-repo-url> ~/Developer/pi-bash-policy
-ln -s ~/Developer/pi-bash-policy/bash-policy.ts ~/.pi/agent/extensions/bash-policy.ts
+pi install git:github.com/kazedayo/pi-bash-policy
 ```
 
-(Copying the file instead of symlinking also works — you just lose
-auto-updates on `git pull`.)
-
-Restart pi (or `/reload`) to pick it up.
+Public repo, so no GitHub auth is needed. Restart pi (or `/reload`) to pick
+it up. Update later with `pi update --extensions`.
 
 ## Uninstall
 
 ```sh
-rm ~/.pi/agent/extensions/bash-policy.ts
+pi remove git:github.com/kazedayo/pi-bash-policy
 ```
